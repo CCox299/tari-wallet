@@ -35,6 +35,7 @@ import { isNewerVersion } from "../lib/version";
 import { decryptSecret } from "../lib/secretAtRest";
 import { fromHex as fromHexString, toHex as toHexString } from "../lib/vault";
 import { summarizeInstruction } from "../lib/instructionSummary";
+import { resolveYatName } from "../lib/yatResolver";
 import { formatBalanceAmountGrouped, formatMaxFee } from "../popup/format";
 import { classifyProviderError } from "../lib/messages";
 import type {
@@ -49,6 +50,7 @@ import type {
   PopupRequest,
   PrivateBalance,
   PrivatePaymentScanResult,
+  ResolvedNameResult,
   ResourceUtxoScanResult,
   ShieldedOutputSummary,
   TransactionRequestOperation,
@@ -281,6 +283,14 @@ async function handlePageRequest(message: PageRequestMessage, sender: chrome.run
       const account = await getAccountById(activeAccountId);
       if (!account) throw new Error("Could not resolve account.");
       return [await account.getComponentAddress()];
+    }
+
+    case "tari_resolveName": {
+      const p = params as { name?: unknown };
+      if (typeof p?.name !== "string") throw new Error("tari_resolveName needs { name: string }.");
+      const r = await resolveYatName(p.name, (await getState()).network);
+      const result: ResolvedNameResult = { name: r.name, canonical: r.canonical, walletAddress: r.walletAddress, network: r.network, source: r.source };
+      return result;
     }
 
     case "tari_disconnect": {
@@ -568,6 +578,7 @@ async function handlePageRequest(message: PageRequestMessage, sender: chrome.run
         dryRunIsLocal: false,
         network: (await getState()).network,
         switchNetwork: true,
+        resolveName: true,
       };
       return capabilities;
     }
@@ -652,6 +663,14 @@ async function handlePageRequest(message: PageRequestMessage, sender: chrome.run
       if (!site) throw new Error("Site is not connected. Call tari_requestAccounts first.");
       const operation = params as TransactionRequestOperation;
       if (operation.kind === "instructions") assertNoStealthTransferInstruction(operation.instructions);
+      if (operation.kind === "sendPrivately" && operation.recipientName) {
+        // Resolved once, before the request is stored, so the approval screen shows the address the
+        // name resolved to and what the user approves is what gets paid. A dApp that passes both a
+        // name and an address gets the address the *name* resolves to, never its own.
+        const resolved = await resolveYatName(operation.recipientName, (await getState()).network);
+        operation.recipientWalletAddress = resolved.walletAddress;
+        operation.recipientName = resolved.canonical;
+      }
       if ("enforceFeeType" in operation && operation.enforceFeeType && !operation.feeType) {
         throw new Error("enforceFeeType requires feeType to also be set.");
       }
@@ -895,7 +914,9 @@ function summarizeOperationForApproval(
       return {
         instructions: [],
         steps: [
-          `Sends ${fmt(operation.amount)} privately to ${shortId(operation.recipientWalletAddress)}.`,
+          operation.recipientName
+            ? `Sends ${fmt(operation.amount)} privately to ${operation.recipientName} (${shortId(operation.recipientWalletAddress)}).`
+            : `Sends ${fmt(operation.amount)} privately to ${shortId(operation.recipientWalletAddress)}.`,
           "The amount and recipient stay hidden on-chain.",
         ],
         warning: promiseWarning(operation.minimumValuePromise, "the recipient's new output", fmt),
@@ -1844,6 +1865,11 @@ async function handlePopupRequest(message: PopupRequest): Promise<unknown> {
     case "popup-get-nft-details": {
       const { network } = await getState();
       return fetchNftDetails(network, message.resourceAddress, message.tokenIds);
+    }
+
+    case "popup-resolve-name": {
+      const { network } = await getState();
+      return resolveYatName(message.name, network);
     }
 
     case "popup-claim-testnet-xtr": {

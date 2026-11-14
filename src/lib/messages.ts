@@ -36,6 +36,8 @@ export type ProviderMethod =
   // ---- Ownership proof (spends nothing; local accounts only) ----
   | "tari_signOwnershipChallenge"
   | "tari_signWalletOwnershipChallenge"
+  // ---- Names ----
+  | "tari_resolveName"
   | "tari_disconnect";
 
 /**
@@ -199,7 +201,13 @@ export type TransactionRequestOperation =
   | {
       kind: "sendPrivately";
       resourceAddress: string;
+      /** The recipient's `otl_` wallet address. When `recipientName` is also given, the wallet
+       * resolves the name itself (`tari_resolveName`) as the request is created and overwrites this
+       * with the resolved address, so the approval screen shows the name and the address it
+       * resolved to, and what the user approves is what gets paid. */
       recipientWalletAddress: string;
+      /** An emoji name (a Yat) for the recipient; see `recipientWalletAddress`. */
+      recipientName?: string;
       amount: string;
       maxFee?: string;
       memo?: string;
@@ -516,6 +524,15 @@ export interface ProviderRequestParams {
    */
   tari_switchNetwork: { network: NetworkName };
 
+  /**
+   * Resolves an emoji name (a Yat, 1 to 6 emoji) to an `otl_` wallet address on the wallet's
+   * current network, from the name's public records (y.at first, then raddish.io). Returns a
+   * `ResolvedNameResult`. Throws when the name has no address, its owner keeps it private, the
+   * address is for another network, or neither source can be reached -- never a guess. Nothing is
+   * cached: names change hands. Needs no connection and no view access: the records are public.
+   */
+  tari_resolveName: { name: string };
+
   tari_disconnect: undefined;
 }
 
@@ -568,6 +585,18 @@ export interface ShieldedOutputSummary {
   transactionId: string;
   createdAt: number;
   memo?: string;
+}
+
+/** `tari_resolveName`'s result. */
+export interface ResolvedNameResult {
+  /** The name as the caller gave it, trimmed. */
+  name: string;
+  /** The canonical spelling: Yat's sibling emoji folded onto their base (💜 -> ❤), selectors dropped. */
+  canonical: string;
+  walletAddress: string;
+  network: NetworkName;
+  /** Which public record answered. */
+  source: "yat" | "raddish";
 }
 
 /** `tari_scanForPrivatePayments`' result. */
@@ -743,6 +772,8 @@ export interface WalletCapabilities {
   network: NetworkName;
   /** `tari_switchNetwork` and the `networkChanged` event exist. */
   switchNetwork: boolean;
+  /** `tari_resolveName` exists, and `sendPrivately` accepts `recipientName`. */
+  resolveName: boolean;
 }
 
 /**
@@ -782,6 +813,7 @@ export type PopupRequest =
   /** `background`: Home's periodic refresh, which must not count as user activity for auto-lock. */
   | { kind: "popup-get-balances"; background?: true }
   | { kind: "popup-get-nft-details"; resourceAddress: string; tokenIds: string[] }
+  | { kind: "popup-resolve-name"; name: string }
   | { kind: "popup-claim-testnet-xtr" }
   | { kind: "popup-send"; recipientWalletAddress: string; resourceAddress: string; amount: string }
   | { kind: "popup-shield"; resourceAddress: string; amount: string; maxFee?: string; memo?: string }

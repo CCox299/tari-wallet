@@ -5,6 +5,8 @@ import { isPlausibleMnemonic } from "../lib/cipherSeed";
 import { AUTO_LOCK_OPTIONS, formatAutoLockOption } from "../lib/autoLock";
 import { summarizeArgs, summarizeInstruction } from "../lib/instructionSummary";
 import { avatarSvg } from "../lib/avatar";
+import { looksLikeYat } from "../lib/yatName";
+import type { ResolvedName } from "../lib/yatResolver";
 import { estimatePasswordStrength, isBlockedPassword } from "../lib/passwordStrength";
 import { qrCodeSvg } from "../lib/qr";
 import {
@@ -1589,6 +1591,22 @@ function recipientAddressError(address: string, network: WalletStatus["network"]
     : t("send.errInvalidAddress");
 }
 
+/** A Send recipient may be an `otl_` address on `network` or an emoji name (a Yat) the wallet resolves. */
+function isRecipientOn(value: string, network: WalletStatus["network"]): boolean {
+  return isOotleWalletAddressOn(value, network) || looksLikeYat(value);
+}
+
+/** The address to pay: the input itself when it is an address, else the name's resolved address on
+ * the wallet's network. Reports the lookup in the status line, so the user sees which address the
+ * name resolved to before the transaction goes out. Throws the resolver's own message on failure. */
+async function resolveRecipient(recipient: string, showStatus: (text: string, kind: "ok" | "err") => void): Promise<string> {
+  if (!looksLikeYat(recipient)) return recipient;
+  showStatus(t("send.resolvingName", { name: recipient }), "ok");
+  const r = await send<ResolvedName>({ kind: "popup-resolve-name", name: recipient });
+  showStatus(t("send.resolvedName", { name: r.canonical, address: shortAddr(r.walletAddress) }), "ok");
+  return r.walletAddress;
+}
+
 function buildPublicSendForm(container: HTMLElement, balances: Balance[], addressBook: { id: string; label: string; address: string }[], network: WalletStatus["network"]) {
   // NonFungible resources are excluded: this form sends a decimal amount of a divisible resource,
   // and an NFT holding's `amount` is a token count with no divisibility to parse a decimal against
@@ -1609,9 +1627,9 @@ function buildPublicSendForm(container: HTMLElement, balances: Balance[], addres
   );
   const balanceHint = h("div", { class: "muted", style: "margin-top:6px" }, [""]);
 
-  const toInput = h("input", { type: "text", placeholder: "otl_…", maxlength: "200" });
+  const toInput = h("input", { type: "text", placeholder: t("send.recipientPlaceholder"), maxlength: "200" });
   const onNetwork = (v: string) => isOotleWalletAddressOn(v, network);
-  wireLiveValidation(toInput as HTMLInputElement, onNetwork);
+  wireLiveValidation(toInput as HTMLInputElement, (v) => isRecipientOn(v, network));
   const addressPicker = buildAddressPicker(addressBook, onNetwork, toInput);
   const amountInput = h("input", { type: "text", placeholder: "0.0", maxlength: "40", inputmode: "decimal" });
   const maxBtn = h("button", { class: "max-btn" }, [t("send.max")]);
@@ -1653,8 +1671,8 @@ function buildPublicSendForm(container: HTMLElement, balances: Balance[], addres
 
   sendBtn.addEventListener("click", async () => {
     const b = selected();
-    const toAddress = (toInput as HTMLInputElement).value.trim();
-    const addressError = recipientAddressError(toAddress, network);
+    const recipient = (toInput as HTMLInputElement).value.trim();
+    const addressError = looksLikeYat(recipient) ? null : recipientAddressError(recipient, network);
     if (addressError) {
       showStatus(addressError, "err");
       return;
@@ -1672,6 +1690,14 @@ function buildPublicSendForm(container: HTMLElement, balances: Balance[], addres
     }
 
     setBusy(sendBtn as HTMLButtonElement, true, t("send.sending"));
+    let toAddress: string;
+    try {
+      toAddress = await resolveRecipient(recipient, showStatus);
+    } catch (e) {
+      showStatus(e instanceof Error ? e.message : String(e), "err");
+      setBusy(sendBtn as HTMLButtonElement, false);
+      return;
+    }
     showStatus(t("send.submitting"), "ok");
     try {
       await send({ kind: "popup-send", recipientWalletAddress: toAddress, resourceAddress: b.resourceAddress, amount: raw.toString() });
@@ -1752,9 +1778,9 @@ function buildPrivateSendForm(
   container.replaceChildren(h("label", {}, [t("send.assetLabel")]), resourceSelect, formSection, statusEl);
 
   const buildForm = (balance: Balance, label: string, maxAmount: bigint) => {
-    const recipientInput = h("input", { type: "text", placeholder: "otl_…", maxlength: "200" });
+    const recipientInput = h("input", { type: "text", placeholder: t("send.recipientPlaceholder"), maxlength: "200" });
     const onNetwork = (v: string) => isOotleWalletAddressOn(v, network);
-    wireLiveValidation(recipientInput as HTMLInputElement, onNetwork);
+    wireLiveValidation(recipientInput as HTMLInputElement, (v) => isRecipientOn(v, network));
     const addressPicker = buildAddressPicker(addressBook, onNetwork, recipientInput);
     const amountInput = h("input", { type: "text", placeholder: "0.0", maxlength: "40", inputmode: "decimal" });
     const maxBtn = h("button", { class: "max-btn" }, [t("send.max")]);
@@ -1779,8 +1805,8 @@ function buildPrivateSendForm(
     });
 
     submitBtn.addEventListener("click", async () => {
-      const recipientWalletAddress = (recipientInput as HTMLInputElement).value.trim();
-      const addressError = recipientAddressError(recipientWalletAddress, network);
+      const recipient = (recipientInput as HTMLInputElement).value.trim();
+      const addressError = looksLikeYat(recipient) ? null : recipientAddressError(recipient, network);
       if (addressError) {
         showStatus(addressError, "err");
         return;
@@ -1801,6 +1827,14 @@ function buildPrivateSendForm(
         return;
       }
       setBusy(submitBtn as HTMLButtonElement, true, t("send.sending"));
+      let recipientWalletAddress: string;
+      try {
+        recipientWalletAddress = await resolveRecipient(recipient, showStatus);
+      } catch (e) {
+        showStatus(e instanceof Error ? e.message : String(e), "err");
+        setBusy(submitBtn as HTMLButtonElement, false);
+        return;
+      }
       showStatus(t("send.submitting"), "ok");
       const memo = (memoInput as HTMLInputElement).value.trim();
       try {

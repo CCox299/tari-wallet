@@ -49,6 +49,7 @@ Igor. The wallet refuses to pay an address for a different network from the one 
 | `tari_getSubstate` | `{ substateId, version? }` | raw `Substate` | General-purpose; not tied to the connected account. |
 | `tari_getCapabilities` | none | `WalletCapabilities` | See shape below. Reflects the *connected account*, not just the codebase. |
 | `tari_getTransactionResult` | `{ transactionId }` | indexer result | Look up a past transaction's on-chain result by id. |
+| `tari_resolveName` | `{ name }` | `ResolvedName` | An emoji name (a Yat, 1 to 6 emoji) to an `otl_` wallet address on the wallet's current network. See "Paying a name" below. Needs no connection or view access: the records are public. |
 
 ```ts
 interface DappTokenBalance {
@@ -60,6 +61,14 @@ interface DappTokenBalance {
   divisibility: number;       // real on-chain Resource.divisibility, e.g. 6 for XTR
   symbol: string | null;      // Resource.metadata.SYMBOL, if set
   name: string | null;        // Resource.metadata.name, if set
+}
+
+interface ResolvedName {
+  name: string;          // as given, trimmed
+  canonical: string;     // Yat's canonical spelling of it
+  walletAddress: string; // otl_… on the wallet's current network
+  network: "mainnet" | "esmeralda" | "igor";
+  source: "yat" | "raddish";
 }
 
 interface WalletCapabilities {
@@ -83,6 +92,7 @@ interface WalletCapabilities {
   confidentialDeposit: boolean;      // depositConfidential -- local accounts only
   supportsPrivateFees: boolean;      // feeType: "private" on a transaction request -- local accounts only
   dryRunIsLocal: boolean;            // always false today -- dry runs round-trip to the indexer
+  resolveName: boolean;              // tari_resolveName and `recipientName` on sendPrivately -- always true today
 }
 ```
 
@@ -354,6 +364,42 @@ signed.
 
 On `sendPrivately` the promise applies to the **recipient's** output only, never your change —
 putting one on change would publish a floor on your own remaining private balance.
+
+### Paying a name
+
+A recipient can be named by their Yat (an emoji name, 1 to 6 emoji) instead of an address, in two
+ways:
+
+```js
+// 1. Resolve it yourself, show the user the address, then pay it.
+const r = await window.tari.request({ method: "tari_resolveName", params: { name: "🦄🚀" } });
+// r = { name: "🦄🚀", canonical: "🦄🚀", walletAddress: "otl_1…", network: "mainnet", source: "yat" | "raddish" }
+
+// 2. Let the wallet resolve it when the request is created.
+await window.tari.request({
+  method: "tari_createTransactionRequest",
+  params: { kind: "sendPrivately", resourceAddress, amount: "50000000", recipientName: "🦄🚀" },
+});
+```
+
+How the wallet resolves a name:
+
+- **Sources, in order:** the name's payment records on y.at (`GET a.y.at/emoji_id/{name}/payment`,
+  public), then the owner's route on raddish.io (`GET raddish.io/api/resolve/{name}?category=ootle`).
+  Only a value shaped like an `otl_` address counts; the first one found wins. Nothing is cached:
+  names change hands.
+- **Spelling:** Yat's own rules. Emoji are split by grapheme cluster, variation selectors are
+  dropped, and Yat's sibling emoji fold onto their base (💜💜💜 and ❤️❤️❤️ are one name). `canonical`
+  is the spelling the lookup used.
+- **Network:** an address for another network is refused outright (`wrong-network`), so a stale or
+  hostile record cannot send a mainnet payment to a testnet address or the reverse.
+- **Failures are errors, never guesses:** `invalid-name`, `not-found` (no Ootle address on record),
+  `not-disclosed` (the owner keeps the raddish route private), `unreachable` (neither source answered).
+- **With `recipientName` on `sendPrivately`,** the wallet resolves once, when the request is created,
+  stores the resolved address on the request, and the approval screen shows both the name and the
+  address. If you pass an address *and* a name, the address the name resolves to is what gets paid.
+
+The wallet's own Send and Send-privately forms accept a name in the recipient field too.
 
 ### Deprecated single-call methods
 

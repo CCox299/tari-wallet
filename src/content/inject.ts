@@ -120,6 +120,8 @@ export interface TariProvider {
   claimPrivatePayment(resourceAddress: string, commitment: string): Promise<unknown>;
   signOwnershipChallenge(resourceAddress: string, substateId: string, challenge: string): Promise<unknown>;
   signWalletOwnershipChallenge(challenge: string): Promise<unknown>;
+  /** An emoji name (Yat) -> `otl_` wallet address on the wallet's current network. */
+  resolveName(name: string): Promise<unknown>;
   createTransactionRequest(operation: unknown): Promise<unknown>;
   getTransactionRequest(requestId: string): Promise<unknown>;
   submitTransactionRequest(requestId: string): Promise<unknown>;
@@ -163,6 +165,7 @@ const provider: TariProvider = {
   signOwnershipChallenge: (resourceAddress, substateId, challenge) =>
     request("tari_signOwnershipChallenge", { resourceAddress, substateId, challenge }),
   signWalletOwnershipChallenge: (challenge) => request("tari_signWalletOwnershipChallenge", { challenge }),
+  resolveName: (name) => request("tari_resolveName", { name }),
   createTransactionRequest: (operation) => request("tari_createTransactionRequest", operation),
   getTransactionRequest: (requestId) => request("tari_getTransactionRequest", { requestId }),
   submitTransactionRequest: (requestId) => request("tari_submitTransactionRequest", { requestId }),
